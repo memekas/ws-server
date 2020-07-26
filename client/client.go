@@ -48,17 +48,7 @@ func auth() (*http.Response, error) {
 	return resp, nil
 }
 
-func main() {
-	flag.Parse()
-
-	// Auth user and get cookies
-	resp, err := auth()
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	cArr := resp.Cookies()
-
+func reciever(cookie string) {
 	// create ws connection with cookies
 	u := url.URL{Scheme: "ws", Host: *addr, Path: "/notification/subscribe"}
 
@@ -68,11 +58,11 @@ func main() {
 		return
 	}
 	wsHeaders := http.Header{
-		"Cookie": {cArr[0].String()},
+		"Cookie": {cookie},
 	}
 
 	log.Printf("connecting to %s", u.String())
-	ws, resp, err := websocket.NewClient(rawConn, &u, wsHeaders, 1024, 1024)
+	ws, _, err := websocket.NewClient(rawConn, &u, wsHeaders, 1024, 1024)
 	if err != nil {
 		log.Error(err)
 		return
@@ -87,4 +77,22 @@ func main() {
 		}
 		log.Infof("recv: %s", p)
 	}
+}
+
+func main() {
+	flag.Parse()
+
+	// Auth user and get cookies
+	resp, err := auth()
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	cArr := resp.Cookies()
+
+	forever := make(chan interface{})
+
+	go reciever(cArr[0].String())
+
+	<-forever
 }

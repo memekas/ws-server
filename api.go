@@ -31,21 +31,26 @@ func main() {
 	}
 	defer db.Close()
 
+	rabbit := &models.RabbitMQ{}
+	if err := rabbit.Init(); err != nil {
+		log.Error(err)
+		return
+	}
+	defer rabbit.Close()
+
+	go controllers.Sender(log, rabbit)
+
 	router := mux.NewRouter()
 
-	router.Handle("/", controllers.Root(log))
-	router.Handle("/echo", controllers.Echo(log))
 	router.Handle("/user/new", controllers.RegUser(db, log)).Methods("POST")
+
 	router.Handle("/user/login", controllers.LoginUser(db, log)).Methods("POST")
 
 	router.Handle("/notification/subscribe", controllers.NotificationSub(log))
-	router.Handle("/notification/sendtouser", controllers.NotificationSendToUser(log)).Methods("POST")
-	router.Handle("/notification/sendtoall", controllers.NotificationSendToAll(log)).Methods("POST")
+	router.Handle("/notification/send", controllers.NotificationSend(log, rabbit)).Methods("POST")
 
 	err = http.ListenAndServe(*addr, router)
 	if err != nil {
 		log.Error(err)
 	}
-
-	// mq.TryRabbit(log)
 }

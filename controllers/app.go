@@ -3,68 +3,20 @@ package controllers
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
+	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/memekas/ws-server/models"
 	"github.com/memekas/ws-server/utils"
 	"github.com/sirupsen/logrus"
+	"github.com/streadway/amqp"
 )
 
 var channels = make(map[uint]chan []byte)
 var usersConnectCount uint32
 var mu = &sync.Mutex{}
-
-// Echo -
-func Echo(log *logrus.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.InfoHandleFunc(log, r)
-
-		upgrader := websocket.Upgrader{}
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		i := 0
-		for {
-			timer := time.NewTimer(time.Second)
-			<-timer.C
-			if i == 5 {
-				if err := c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye")); err != nil {
-					log.Error(err)
-					return
-				}
-				a := c.RemoteAddr()
-				log.Infof("Close connection %s", a.String())
-				return
-			}
-			if err := c.WriteMessage(websocket.TextMessage, []byte(strconv.Itoa(i))); err != nil {
-				log.Error(err)
-				return
-			}
-			i++
-		}
-	})
-}
-
-// Root - redirect to login or home page
-func Root(log *logrus.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.InfoHandleFunc(log, r)
-
-		_, err := r.Cookie("session")
-		if err == http.ErrNoCookie {
-			http.Redirect(w, r, "/user/login", http.StatusFound)
-			return
-		}
-
-		http.Redirect(w, r, "/home", http.StatusFound)
-	})
-}
 
 // NotificationSub - subscribe user to notifications
 func NotificationSub(log *logrus.Logger) http.Handler {
@@ -73,7 +25,7 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 
 		cookie, err := r.Cookie("session")
 		if err == http.ErrNoCookie {
-			http.Redirect(w, r, "/user/login", http.StatusFound)
+			utils.Respond(w, http.StatusUnauthorized, utils.Message(false, "Auth cookie not found"))
 			return
 		}
 
@@ -91,7 +43,10 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 
 		// get user id from cookie
 		tk := &models.Token{}
-		tk.Decrypt(cookie.Value)
+		if err := tk.Decrypt(cookie.Value); err != nil {
+			utils.Respond(w, http.StatusUnauthorized, utils.Message(false, "Failed to decrypt cookie"))
+			return
+		}
 
 		// create new channel for messages. Delete when connection refused
 		in := make(chan []byte)
@@ -117,14 +72,14 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 	})
 }
 
-// NotificationSendToUser - send notification to user
-func NotificationSendToUser(log *logrus.Logger) http.Handler {
+// NotificationSend - send notification. If toUser == 0 send to all
+func NotificationSend(log *logrus.Logger, rabbit *models.RabbitMQ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		utils.InfoHandleFunc(log, r)
 
 		_, err := r.Cookie("session")
 		if err == http.ErrNoCookie {
-			http.Redirect(w, r, "/user/login", http.StatusFound)
+			utils.Respond(w, http.StatusUnauthorized, utils.Message(false, "Auth cookie not found"))
 			return
 		}
 
@@ -132,43 +87,140 @@ func NotificationSendToUser(log *logrus.Logger) http.Handler {
 		err = json.NewDecoder(r.Body).Decode(not)
 		if err != nil {
 			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "Invalid request"))
-			return
-		}
-		log.Info(*not)
-
-		out, ok := channels[not.ToUser]
-		if !ok {
-			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "toUser not found"))
+			log.Error(err)
 			return
 		}
 
-		out <- []byte(not.Msg)
+		ch, err := rabbit.Get().Channel()
+		if err != nil {
+			utils.Respond(w, http.StatusInternalServerError, utils.Message(false, "Failed to open a rabbit channel"))
+			log.Error(err)
+			return
+		}
+		defer ch.Close()
+
+		err = ch.ExchangeDeclare(
+			os.Getenv("RABBITMQ_EXCHANGE_NAME_NOTIFICATIONS"), //name
+			"direct", //type
+			true,     //durable
+			false,    // auto-delete
+			false,    //internal
+			false,    //no-wait
+			nil,      //arguments
+		)
+		if err != nil {
+			utils.Respond(w, http.StatusInternalServerError, utils.Message(false, "Failed to declare rabbit exchange"))
+			log.Error(err)
+			return
+		}
+
+		bNot, err := json.Marshal(not)
+		if err != nil {
+			utils.Respond(w, http.StatusInternalServerError, utils.Message(false, "Failed Marshal"))
+			log.Error(err)
+			return
+		}
+
+		err = ch.Publish(
+			os.Getenv("RABBITMQ_EXCHANGE_NAME_NOTIFICATIONS"),     // exchange
+			os.Getenv("RABBITMQ_EXCHANGE_ROUT_KEY_NOTIFICATIONS"), // routing key
+			false, // mandatory
+			false, // immediate
+			amqp.Publishing{
+				ContentType: "application/json",
+				Body:        bNot,
+			})
+		if err != nil {
+			utils.Respond(w, http.StatusInternalServerError, utils.Message(false, "Failed to publish rabbit message"))
+			log.Error(err)
+			return
+		}
+
 	})
 }
 
-// NotificationSendToAll - send notification to all users
-func NotificationSendToAll(log *logrus.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		utils.InfoHandleFunc(log, r)
+// Sender - Worker that sends notifications to users
+func Sender(log *logrus.Logger, rabbit *models.RabbitMQ) {
+	ch, err := rabbit.Get().Channel()
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	defer ch.Close()
 
-		_, err := r.Cookie("session")
-		if err == http.ErrNoCookie {
-			http.Redirect(w, r, "/user/login", http.StatusFound)
-			return
-		}
+	err = ch.ExchangeDeclare(
+		os.Getenv("RABBITMQ_EXCHANGE_NAME_NOTIFICATIONS"), //name
+		"direct", //type
+		true,     //durable
+		false,    // auto-delete
+		false,    //internal
+		false,    //no-wait
+		nil,      //arguments
+	)
+	if err != nil {
+		log.Error(err)
+		return
+	}
 
-		not := &models.Notification{}
-		err = json.NewDecoder(r.Body).Decode(not)
-		if err != nil {
-			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "Invalid request"))
-			return
-		}
-		log.Info(*not)
+	q, err := ch.QueueDeclare(
+		os.Getenv("RABBITMQ_QUEUE_NAME_NOTIFICATIONS"), // name
+		false, // durable
+		false, // delete when unused
+		true,  // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		log.Error(err)
+		return
+	}
 
-		mu.Lock()
-		for _, val := range channels {
-			val <- []byte(not.Msg)
+	err = ch.QueueBind(
+		q.Name, // queue
+		os.Getenv("RABBITMQ_EXCHANGE_ROUT_KEY_NOTIFICATIONS"), // routing key
+		os.Getenv("RABBITMQ_EXCHANGE_NAME_NOTIFICATIONS"),     // exchange
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	msgs, err := ch.Consume(
+		q.Name, // queue
+		"",     // consumer
+		true,   // auto ack
+		false,  // exclusive
+		false,  // no local
+		false,  // no wait
+		nil,    // args
+	)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	for msg := range msgs {
+		sendNotification(log, msg.Body)
+	}
+}
+
+func sendNotification(log *logrus.Logger, body []byte) {
+	not := &models.Notification{}
+	err := json.Unmarshal(body, not)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	mu.Lock()
+	if not.ToUser == 0 {
+		for _, value := range channels {
+			value <- []byte(not.Msg)
 		}
-		mu.Unlock()
-	})
+	} else {
+		channels[not.ToUser] <- []byte(not.Msg)
+	}
+	mu.Unlock()
 }

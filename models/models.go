@@ -96,16 +96,12 @@ func (tk *Token) Decrypt(tkString string) error {
 	_, err := jwt.ParseWithClaims(tkString, tk, func(token *jwt.Token) (interface{}, error) {
 		return []byte(os.Getenv("JWT_SECRET")), nil
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 // Notification that sends to users
 type Notification struct {
 	ToUser   uint   `json:"toUser"`
-	FromUser uint   `json:-`
+	FromUser uint   `json:"-"`
 	Msg      string `json:"msg"`
 }

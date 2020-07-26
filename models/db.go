@@ -13,7 +13,7 @@ type DB struct {
 	con *gorm.DB
 }
 
-// Init - init db connection from .env file
+// Init - Open db connection and migrate Account struct
 func (db *DB) Init() error {
 
 	dbURI := fmt.Sprintf("host=%s port=%s user=%s dbname=%s password=%s sslmode=disable",
