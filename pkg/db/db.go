@@ -26,7 +26,7 @@ func (db *DB) Init() error {
 		return err
 	}
 
-	db.con.Debug().AutoMigrate(&Account{})
+	db.con.AutoMigrate(&Account{})
 	return nil
 }
 

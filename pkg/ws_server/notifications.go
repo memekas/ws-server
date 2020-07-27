@@ -36,6 +36,7 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 			log.Error(err)
 			return
 		}
+		defer con.Close()
 
 		// add user count
 		atomic.AddUint32(&usersConnectCount, 1)
@@ -61,13 +62,31 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 			mu.Unlock()
 		}()
 
-		// read from channel and send to user
-		for {
-			if err := con.WriteMessage(websocket.TextMessage, <-in); err != nil {
-				log.Error(err)
-				return
+		// for correct closing
+		close := make(chan interface{}, 1)
+		go func() {
+			for {
+				_, _, err := con.ReadMessage()
+				if err != nil {
+					log.Error(err)
+					close <- struct{}{}
+					in <- []byte{}
+					return
+				}
 			}
-		}
+		}()
+
+		// read from channel and send to user
+		go func() {
+			for {
+				if err := con.WriteMessage(websocket.TextMessage, <-in); err != nil {
+					log.Error(err)
+					return
+				}
+			}
+		}()
+
+		<-close
 
 	})
 }
@@ -223,4 +242,16 @@ func sendNotification(log *logrus.Logger, body []byte) {
 		channels[not.ToUser] <- []byte(not.Msg)
 	}
 	mu.Unlock()
+}
+
+func GetUsersOnline(log *logrus.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		utils.InfoHandleFunc(log, r)
+
+		online := map[string]interface{}{
+			"count": atomic.LoadUint32(&usersConnectCount),
+		}
+
+		utils.Respond(w, http.StatusOK, online)
+	})
 }

@@ -5,3 +5,7 @@ type Notification struct {
 	FromUser uint   `json:"-"`
 	Msg      string `json:"msg"`
 }
+
+type UsersOnline struct {
+	Count uint32 `json:"count"`
+}

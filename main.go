@@ -49,6 +49,8 @@ func main() {
 	router.Handle("/notification/subscribe", ws_server.NotificationSub(log))
 	router.Handle("/notification/send", ws_server.NotificationSend(log, rabbit)).Methods("POST")
 
+	router.Handle("/notification/users", ws_server.GetUsersOnline(log))
+
 	err = http.ListenAndServe(*addr, router)
 	if err != nil {
 		log.Error(err)
