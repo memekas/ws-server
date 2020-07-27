@@ -48,6 +48,36 @@ func auth() (*http.Response, error) {
 	return resp, nil
 }
 
+func reg() (*http.Response, error) {
+	// User auth
+	user := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}{
+		Email:    *email,
+		Password: *password,
+	}
+
+	b, err := json.Marshal(user)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", "http://"+*addr+"/user/new", bytes.NewBuffer(b))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 func reciever(cookie string) {
 	// create ws connection with cookies
 	u := url.URL{Scheme: "ws", Host: *addr, Path: "/notification/subscribe"}
@@ -83,11 +113,28 @@ func main() {
 	flag.Parse()
 
 	// Auth user and get cookies
-	resp, err := auth()
+	log.Info("Reg user: " + *email)
+	resp, err := reg()
 	if err != nil {
 		log.Error(err)
 		return
 	}
+	if resp.StatusCode == 400 {
+		log.Info("User " + *email + "already exist")
+	}
+
+	// Auth user and get cookies
+	log.Info("Auth user: " + *email)
+	resp, err = auth()
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	if resp.StatusCode == 400 {
+		log.Info("Fail to auth")
+		return
+	}
+
 	cArr := resp.Cookies()
 
 	forever := make(chan interface{})

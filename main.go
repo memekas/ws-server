@@ -6,8 +6,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
-	"github.com/memekas/ws-server/controllers"
-	"github.com/memekas/ws-server/models"
+	"github.com/memekas/ws-server/pkg/db"
+	"github.com/memekas/ws-server/pkg/rabbit"
+	"github.com/memekas/ws-server/pkg/ws_server"
 	"github.com/sirupsen/logrus"
 )
 
@@ -24,30 +25,29 @@ func main() {
 	flag.Parse()
 	log.Info(*addr)
 
-	db := &models.DB{}
+	db := &db.DB{}
 	if err := db.Init(); err != nil {
 		log.Error(err)
 		return
 	}
 	defer db.Close()
 
-	rabbit := &models.RabbitMQ{}
+	rabbit := &rabbit.RabbitMQ{}
 	if err := rabbit.Init(); err != nil {
 		log.Error(err)
 		return
 	}
 	defer rabbit.Close()
 
-	go controllers.Sender(log, rabbit)
+	go ws_server.Sender(log, rabbit)
 
 	router := mux.NewRouter()
 
-	router.Handle("/user/new", controllers.RegUser(db, log)).Methods("POST")
+	router.Handle("/user/new", ws_server.RegUser(db, log)).Methods("POST")
+	router.Handle("/user/login", ws_server.LoginUser(db, log)).Methods("POST")
 
-	router.Handle("/user/login", controllers.LoginUser(db, log)).Methods("POST")
-
-	router.Handle("/notification/subscribe", controllers.NotificationSub(log))
-	router.Handle("/notification/send", controllers.NotificationSend(log, rabbit)).Methods("POST")
+	router.Handle("/notification/subscribe", ws_server.NotificationSub(log))
+	router.Handle("/notification/send", ws_server.NotificationSend(log, rabbit)).Methods("POST")
 
 	err = http.ListenAndServe(*addr, router)
 	if err != nil {

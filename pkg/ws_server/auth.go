@@ -1,27 +1,26 @@
-package controllers
+package ws_server
 
 import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/memekas/ws-server/models"
-	"github.com/memekas/ws-server/utils"
+	"github.com/memekas/ws-server/pkg/db"
+	"github.com/memekas/ws-server/pkg/utils"
 	"github.com/sirupsen/logrus"
 )
 
-// RegUser - register new user in *DB
-func RegUser(con *models.DB, log *logrus.Logger) http.Handler {
+func RegUser(con *db.DB, log *logrus.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		utils.InfoHandleFunc(log, r)
 
-		user := &models.Account{}
+		user := &db.Account{}
 		err := json.NewDecoder(r.Body).Decode(user)
 		if err != nil {
 			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "Invalid request"))
 			return
 		}
 
-		if err := user.Create(con); err != nil {
+		if err := con.CreateUser(user); err != nil {
 			utils.Respond(w, http.StatusBadRequest, utils.Message(false, err.Error()))
 			return
 		}
@@ -32,19 +31,18 @@ func RegUser(con *models.DB, log *logrus.Logger) http.Handler {
 	})
 }
 
-// LoginUser - login user
-func LoginUser(con *models.DB, log *logrus.Logger) http.Handler {
+func LoginUser(con *db.DB, log *logrus.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		utils.InfoHandleFunc(log, r)
 
-		user := &models.Account{}
+		user := &db.Account{}
 		err := json.NewDecoder(r.Body).Decode(user)
 		if err != nil {
 			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "Invalid request"))
 			return
 		}
 
-		if err := user.Login(con); err != nil {
+		if err := con.LoginUser(user); err != nil {
 			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "User or password are incorrect"))
 			return
 		}

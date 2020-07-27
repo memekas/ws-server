@@ -1,4 +1,4 @@
-package controllers
+package ws_server
 
 import (
 	"encoding/json"
@@ -8,8 +8,9 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
-	"github.com/memekas/ws-server/models"
-	"github.com/memekas/ws-server/utils"
+	"github.com/memekas/ws-server/pkg/auth"
+	"github.com/memekas/ws-server/pkg/rabbit"
+	"github.com/memekas/ws-server/pkg/utils"
 	"github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 )
@@ -18,7 +19,6 @@ var channels = make(map[uint]chan []byte)
 var usersConnectCount uint32
 var mu = &sync.Mutex{}
 
-// NotificationSub - subscribe user to notifications
 func NotificationSub(log *logrus.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		utils.InfoHandleFunc(log, r)
@@ -42,7 +42,7 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 		defer atomic.AddUint32(&usersConnectCount, ^uint32(0))
 
 		// get user id from cookie
-		tk := &models.Token{}
+		tk := &auth.Token{}
 		if err := tk.Decrypt(cookie.Value); err != nil {
 			utils.Respond(w, http.StatusUnauthorized, utils.Message(false, "Failed to decrypt cookie"))
 			return
@@ -73,7 +73,7 @@ func NotificationSub(log *logrus.Logger) http.Handler {
 }
 
 // NotificationSend - send notification. If toUser == 0 send to all
-func NotificationSend(log *logrus.Logger, rabbit *models.RabbitMQ) http.Handler {
+func NotificationSend(log *logrus.Logger, rabbit *rabbit.RabbitMQ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		utils.InfoHandleFunc(log, r)
 
@@ -83,7 +83,7 @@ func NotificationSend(log *logrus.Logger, rabbit *models.RabbitMQ) http.Handler 
 			return
 		}
 
-		not := &models.Notification{}
+		not := &Notification{}
 		err = json.NewDecoder(r.Body).Decode(not)
 		if err != nil {
 			utils.Respond(w, http.StatusBadRequest, utils.Message(false, "Invalid request"))
@@ -140,7 +140,7 @@ func NotificationSend(log *logrus.Logger, rabbit *models.RabbitMQ) http.Handler 
 }
 
 // Sender - Worker that sends notifications to users
-func Sender(log *logrus.Logger, rabbit *models.RabbitMQ) {
+func Sender(log *logrus.Logger, rabbit *rabbit.RabbitMQ) {
 	ch, err := rabbit.Get().Channel()
 	if err != nil {
 		log.Error(err)
@@ -207,7 +207,7 @@ func Sender(log *logrus.Logger, rabbit *models.RabbitMQ) {
 }
 
 func sendNotification(log *logrus.Logger, body []byte) {
-	not := &models.Notification{}
+	not := &Notification{}
 	err := json.Unmarshal(body, not)
 	if err != nil {
 		log.Error(err)
